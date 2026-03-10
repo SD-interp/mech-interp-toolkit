@@ -13,6 +13,28 @@ from .utils import empty_dict_like, regularize_position
 type Position = slice | int | Sequence | None
 
 
+def _get_model_device(model: PreTrainedModel) -> torch.device:
+    """Infer the model device from parameters/buffers, defaulting to CPU."""
+    try:
+        return next(model.parameters()).device
+    except StopIteration:
+        try:
+            return next(model.buffers()).device
+        except StopIteration:
+            return torch.device("cpu")
+
+
+def _inputs_on_model_device(
+    model: PreTrainedModel, inputs: dict[str, Tensor]
+) -> dict[str, Tensor]:
+    """Return a copy of inputs with all tensors moved to model device."""
+    model_device = _get_model_device(model)
+    output: dict[str, Tensor] = {}
+    for key, value in inputs.items():
+        output[key] = value if value.device == model_device else value.to(model_device)
+    return output
+
+
 def get_activations_and_grads(
     model: PreTrainedModel,
     inputs: dict[str, Tensor],
@@ -23,6 +45,7 @@ def get_activations_and_grads(
     clone_tensors: bool = False,
 ) -> tuple[ActivationDict, ActivationDict, Tensor | None]:
     positions = regularize_position(positions)
+    inputs = _inputs_on_model_device(model, inputs)
 
     module_dict = dict(model.named_modules())
 
@@ -67,6 +90,7 @@ def get_gradients(
     clone_tensors: bool = False,
 ) -> tuple[ActivationDict, Tensor | None]:
     positions = regularize_position(positions)
+    inputs = _inputs_on_model_device(model, inputs)
 
     module_dict = dict(model.named_modules())
 
@@ -106,6 +130,7 @@ def get_activations(
     clone_tensors: bool = False,
 ) -> tuple[ActivationDict, Tensor | None]:
     positions = regularize_position(positions)
+    inputs = _inputs_on_model_device(model, inputs)
 
     module_dict = dict(model.named_modules())
 
