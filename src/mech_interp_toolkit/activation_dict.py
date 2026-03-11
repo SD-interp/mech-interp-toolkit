@@ -255,6 +255,23 @@ class ActivationDict(ArithmeticOperation):
     def zeros_like(self) -> Self:
         return zeros_dict_like(self)
 
+    def add_(self, other, *, alpha: int | float = 1) -> Self:
+        """In-place add, mirroring torch.Tensor.add_ semantics where relevant."""
+        if isinstance(other, ActivationDict):
+            self.check_compatibility(other)
+            for key in self.keys():
+                if key in other:
+                    self[key].add_(other[key], alpha=alpha)
+            return self
+        elif isinstance(other, (int, float, torch.Tensor)):
+            for key in self.keys():
+                self[key].add_(other, alpha=alpha)
+            return self
+        else:
+            raise NotImplementedError(
+                "In-place add only supported for ActivationDict, scalars, and tensors."
+            )
+
     def reorganize(self) -> Self:
         execution_order = {
             "layer_in": 0,
