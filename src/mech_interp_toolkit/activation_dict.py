@@ -76,65 +76,88 @@ class ArithmeticOperation(FreezableDict):
         self.config = config
         self.positions = positions
 
-    def check_compatibility(self, other) -> None:
-        if not isinstance(other, ActivationDict):
-            raise ValueError("Operand must be an instance of ActivationDict.")
-
+    def check_act_dict_compatibility(self, other) -> None:
         if self.keys() != other.keys():
             warnings.warn(
                 "ActivationDicts have different keys; only matching keys will be processed."
             )
 
     def __add__(self, other) -> Self:
-        self.check_compatibility(other)
         if isinstance(other, ActivationDict):
+            self.check_act_dict_compatibility(other)
             result = empty_dict_like(self)
             for key in self.keys():
                 if key in other:
                     result[key] = self[key] + other[key]
             return result
+        elif isinstance(other, (int, float, torch.Tensor)):
+            result = empty_dict_like(self)
+            for key in self.keys():
+                result[key] = self[key] + other
+            return result
         else:
-            raise NotImplementedError("Addition only supported between ActivationDicts.")
+            raise NotImplementedError(
+                f"Addition not supported for this type (received: {type(other).__name__})."
+            )
 
     def __iadd__(self, other) -> Self:
-        self.check_compatibility(other)
         if isinstance(other, ActivationDict):
+            self.check_act_dict_compatibility(other)
             for key in self.keys():
                 if key in other:
                     self[key].add_(other[key])
             return self
+        elif isinstance(other, (int, float, torch.Tensor)):
+            for key in self.keys():
+                self[key].add_(other)
+            return self
         else:
-            raise NotImplementedError("In-place addition only supported between ActivationDicts.")
+            raise NotImplementedError(
+                f"In-place addition not supported for this type (received: {type(other).__name__})."
+            )
 
     def __radd__(self, other) -> Self:
+        if isinstance(other, ActivationDict):
+            return NotImplemented
         return self.__add__(other)
 
     def __sub__(self, other) -> Self:
-        self.check_compatibility(other)
         if isinstance(other, ActivationDict):
+            self.check_act_dict_compatibility(other)
             result = empty_dict_like(self)
             for key in self.keys():
                 if key in other:
                     result[key] = self[key] - other[key]
             return result
+        elif isinstance(other, (int, float, torch.Tensor)):
+            result = empty_dict_like(self)
+            for key in self.keys():
+                result[key] = self[key] - other
+            return result
         else:
-            raise NotImplementedError("Subtraction only supported between ActivationDicts.")
+            raise NotImplementedError(
+                f"Subtraction not supported for this type (received: {type(other).__name__})."
+            )
 
     def __isub__(self, other) -> Self:
-        self.check_compatibility(other)
         if isinstance(other, ActivationDict):
+            self.check_act_dict_compatibility(other)
             for key in self.keys():
                 if key in other:
                     self[key].sub_(other[key])
             return self
+        elif isinstance(other, (int, float, torch.Tensor)):
+            for key in self.keys():
+                self[key].sub_(other)
+            return self
         else:
             raise NotImplementedError(
-                "In-place subtraction only supported between ActivationDicts."
+                f"In-place subtraction not supported for this type (received: {type(other).__name__})."
             )
 
     def __mul__(self, other) -> Self:
         if isinstance(other, ActivationDict):
-            self.check_compatibility(other)
+            self.check_act_dict_compatibility(other)
             result = empty_dict_like(self)
             for key in self.keys():
                 if key in other:
@@ -146,11 +169,13 @@ class ArithmeticOperation(FreezableDict):
                 result[key] = self[key] * other
             return result
         else:
-            raise NotImplementedError("Multiplication not supported for this type.")
+            raise NotImplementedError(
+                f"Multiplication not supported for this type (received: {type(other).__name__})."
+            )
 
     def __imul__(self, other) -> Self:
         if isinstance(other, ActivationDict):
-            self.check_compatibility(other)
+            self.check_act_dict_compatibility(other)
             for key in self.keys():
                 if key in other:
                     self[key].mul_(other[key])
@@ -160,14 +185,18 @@ class ArithmeticOperation(FreezableDict):
                 self[key].mul_(other)
             return self
         else:
-            raise NotImplementedError("In-place multiplication not supported for this type.")
+            raise NotImplementedError(
+                f"In-place multiplication not supported for this type (received: {type(other).__name__})."
+            )
 
     def __rmul__(self, other) -> Self:
+        if isinstance(other, ActivationDict):
+            return NotImplemented
         return self.__mul__(other)
 
     def __truediv__(self, other) -> Self:
         if isinstance(other, ActivationDict):
-            self.check_compatibility(other)
+            self.check_act_dict_compatibility(other)
             result = empty_dict_like(self)
             for key in self.keys():
                 if key in other:
@@ -179,19 +208,42 @@ class ArithmeticOperation(FreezableDict):
                 result[key] = self[key] / other
             return result
         else:
-            raise NotImplementedError("Division not supported for this type.")
+            raise NotImplementedError(
+                f"Division not supported for this type (received: {type(other).__name__})."
+            )
 
     def __itruediv__(self, other) -> Self:
-        if isinstance(other, (int, float, torch.Tensor)):
+        if isinstance(other, ActivationDict):
+            self.check_act_dict_compatibility(other)
+            for key in self.keys():
+                if key in other:
+                    self[key].div_(other[key])
+            return self
+        elif isinstance(other, (int, float, torch.Tensor)):
             for key in self.keys():
                 self[key].div_(other)
             return self
         else:
-            raise NotImplementedError("In-place division only supported for scalars and tensors.")
+            raise NotImplementedError(
+                f"In-place division not supported for this type (received: {type(other).__name__})."
+            )
+
+    def __rtruediv__(self, other) -> Self:
+        if isinstance(other, ActivationDict):
+            return NotImplemented
+        elif isinstance(other, (int, float, torch.Tensor)):
+            result = empty_dict_like(self)
+            for key in self.keys():
+                result[key] = other / self[key]
+            return result
+        else:
+            raise NotImplementedError(
+                f"Division not supported for this type (received: {type(other).__name__})."
+            )
 
     def __matmul__(self, other) -> Self:
         if isinstance(other, ActivationDict):
-            self.check_compatibility(other)
+            self.check_act_dict_compatibility(other)
             result = empty_dict_like(self)
             for key in self.keys():
                 if key in other:
@@ -203,7 +255,9 @@ class ArithmeticOperation(FreezableDict):
                 result[key] = self[key] @ other
             return result
         else:
-            raise NotImplementedError("Matrix multiplication not supported for this type.")
+            raise NotImplementedError(
+                f"Matrix multiplication not supported for this type (received: {type(other).__name__})."
+            )
 
     def __rmatmul__(self, other) -> Self:
         if isinstance(other, torch.Tensor):
@@ -212,7 +266,9 @@ class ArithmeticOperation(FreezableDict):
                 result[key] = other @ self[key]
             return result
         else:
-            raise NotImplementedError("Matrix multiplication not supported for this type.")
+            raise NotImplementedError(
+                f"Matrix multiplication not supported for this type (received: {type(other).__name__})."
+            )
 
 
 class ActivationDict(ArithmeticOperation):
@@ -258,7 +314,7 @@ class ActivationDict(ArithmeticOperation):
     def add_(self, other, *, alpha: int | float = 1) -> Self:
         """In-place add, mirroring torch.Tensor.add_ semantics where relevant."""
         if isinstance(other, ActivationDict):
-            self.check_compatibility(other)
+            self.check_act_dict_compatibility(other)
             for key in self.keys():
                 if key in other:
                     self[key].add_(other[key], alpha=alpha)
@@ -269,7 +325,7 @@ class ActivationDict(ArithmeticOperation):
             return self
         else:
             raise NotImplementedError(
-                "In-place add only supported for ActivationDict, scalars, and tensors."
+                f"In-place addition not supported for this type (received: {type(other).__name__})."
             )
 
     def reorganize(self) -> Self:

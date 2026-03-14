@@ -7,7 +7,7 @@ from torch.nn import functional as F  # noqa: N812
 from transformers import PreTrainedModel
 
 from .activation_dict import ActivationDict, LayerComponent
-from .hook_utils import gen_hookfn, temporary_hooks
+from .hook_utils import gen_cache_hookfn, gen_patch_hookfn, temporary_hooks
 from .utils import empty_dict_like, regularize_position
 
 type Position = slice | int | Sequence | None
@@ -24,9 +24,7 @@ def _get_model_device(model: PreTrainedModel) -> torch.device:
             return torch.device("cpu")
 
 
-def _inputs_on_model_device(
-    model: PreTrainedModel, inputs: dict[str, Tensor]
-) -> dict[str, Tensor]:
+def _inputs_on_model_device(model: PreTrainedModel, inputs: dict[str, Tensor]) -> dict[str, Tensor]:
     """Return a copy of inputs with all tensors moved to model device."""
     model_device = _get_model_device(model)
     output: dict[str, Tensor] = {}
@@ -53,8 +51,8 @@ def get_activations_and_grads(
     grad_output = ActivationDict(model.config, positions=positions, value_type="gradient")
 
     hook_specs_dict = {
-        "fwd": gen_hookfn(layer_components, act_output, clone_tensors=clone_tensors),
-        "bwd": gen_hookfn(layer_components, grad_output, clone_tensors=clone_tensors),
+        "fwd": gen_cache_hookfn(layer_components, act_output, clone_tensors=clone_tensors),
+        "bwd": gen_cache_hookfn(layer_components, grad_output, clone_tensors=clone_tensors),
     }
 
     with torch.enable_grad():
@@ -97,7 +95,7 @@ def get_gradients(
     grad_output = ActivationDict(model.config, positions=positions, value_type="gradient")
 
     hook_specs_dict = {
-        "bwd": gen_hookfn(layer_components, grad_output, clone_tensors=clone_tensors),
+        "bwd": gen_cache_hookfn(layer_components, grad_output, clone_tensors=clone_tensors),
     }
 
     with torch.enable_grad():
@@ -137,7 +135,45 @@ def get_activations(
     act_output = ActivationDict(model.config, positions=positions, value_type="activation")
 
     hook_specs_dict = {
-        "fwd": gen_hookfn(layer_components, act_output, clone_tensors=clone_tensors),
+        "fwd": gen_cache_hookfn(layer_components, act_output, clone_tensors=clone_tensors),
+    }
+
+    with torch.no_grad():
+        with temporary_hooks(module_dict, hook_specs_dict):
+            logits = model(**inputs).logits
+
+    if "attention_mask" in inputs:
+        act_output.attention_mask = inputs["attention_mask"]
+    act_output.extract_positions()
+    logits = logits.detach()[:, act_output.positions, :]
+
+    if return_logits:
+        return act_output, logits
+    else:
+        return act_output, None
+
+
+def patch_activations(
+    model: PreTrainedModel,
+    inputs: dict[str, Tensor],
+    layer_components: list[LayerComponent],
+    patch_dict: ActivationDict,
+    positions: int | slice | Sequence | None = None,
+    return_logits: bool = True,
+    clone_tensors: bool = False,
+) -> tuple[ActivationDict, Tensor | None]:
+    positions = regularize_position(positions)
+    model_device = _get_model_device(model)
+    inputs = _inputs_on_model_device(model, inputs)
+    patch_dict = patch_dict.to(device=model_device)
+
+    module_dict = dict(model.named_modules())
+
+    act_output = ActivationDict(model.config, positions=positions, value_type="activation")
+
+    hook_specs_dict = {
+        "patch": gen_patch_hookfn(patch_dict),
+        "fwd": gen_cache_hookfn(layer_components, act_output, clone_tensors=clone_tensors),
     }
 
     with torch.no_grad():
