@@ -35,6 +35,12 @@ class HookSpecPost:
     ]
 
 
+class StopExecution(Exception):  # noqa: N818
+    """Exception raised to stop model execution early."""
+
+    pass
+
+
 def _detach_first_tensor(
     value: torch.Tensor | tuple | list,
     clone_tensors: bool = False,
@@ -120,7 +126,6 @@ def gen_patch_hookfn(
 def gen_cache_hookfn(
     layer_components: Iterable[LayerComponent],
     results: ActivationDict,
-    patch_dict: ActivationDict | None = None,
     clone_tensors: bool = False,
 ) -> Iterable[HookSpecPre | HookSpecPost]:
     hook_list = []
@@ -148,6 +153,7 @@ def gen_cache_hookfn(
 def temporary_hooks(
     module_dict: ModuleDict,
     hook_specs_dict: dict[str, Iterable[HookSpecPre | HookSpecPost]],
+    early_exit: bool = False,
 ):
     """
     Register forward hooks temporarily and remove them on exit.
@@ -156,6 +162,7 @@ def temporary_hooks(
       fn(output, module_name, module) -> None or modified_output
     """
     handles: list[RemovableHandle] = []
+    last_layer_of_interest = 0
 
     try:
         for hook_type, hook_specs in hook_specs_dict.items():
@@ -194,6 +201,8 @@ def temporary_hooks(
                     handles.append(
                         module.register_forward_hook(make_post_hook(fn, layer_component))
                     )
+                    last_layer_of_interest = max(last_layer_of_interest, layer_component[0])
+
                 elif hook_type == "bwd":
                     handles.append(
                         module.register_full_backward_hook(make_post_hook(fn, layer_component))
@@ -207,10 +216,25 @@ def temporary_hooks(
                         handles.append(
                             module.register_forward_hook(make_post_hook(fn, layer_component))
                         )
-
                 else:
                     raise ValueError(f"Invalid hook type {hook_type}")
+
+        if early_exit:
+            if "bwd" in hook_specs_dict.keys():
+                raise ValueError("Early exit not supported with backward passes")
+
+            stop_at_module = layer_component_to_hookloc((last_layer_of_interest, "layer_out"))
+            module = module_dict[stop_at_module]
+
+            def stop_execution_hook(module: nn.Module, *args, **kwargs):
+                raise StopExecution
+
+            handles.append(module.register_forward_hook(stop_execution_hook))
+
         yield
+
+    except StopExecution:
+        print(f"model execution stopped after layer {last_layer_of_interest}")
 
     except Exception as e:
         print(f"Exception occurred while executing {hook_type} hook for {layer_component}: {e}")
