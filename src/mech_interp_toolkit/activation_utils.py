@@ -197,18 +197,18 @@ def patch_activations(
 def get_embeddings_dict(model: PreTrainedModel, inputs: dict[str, Tensor]) -> dict[str, Tensor]:
     """Return a synthetic-input-ready copy of ``inputs`` with ``inputs_embeds`` populated."""
     embeddings_inputs = inputs.copy()
-    embeddings_inputs.pop("input_ids", None)
+    input_ids = embeddings_inputs.pop("input_ids", None)
 
     if "inputs_embeds" not in embeddings_inputs:
-        embeds, _ = get_activations(
-            model,
-            inputs,
-            [(0, "layer_in")],
-            positions=None,
-            return_logits=False,
-            early_exit=True,
-        )
-        embeddings_inputs["inputs_embeds"] = embeds[(0, "layer_in")].detach()
+        if input_ids is None:
+            raise ValueError("Expected either 'inputs_embeds' or 'input_ids' in inputs.")
+        embedding_layer = model.get_input_embeddings()
+        if embedding_layer is None:
+            raise ValueError("Model does not expose an input embedding layer.")
+        embedding_device = embedding_layer.weight.device
+        embeddings_inputs["inputs_embeds"] = embedding_layer(
+            input_ids.to(device=embedding_device)
+        ).detach()
 
     return embeddings_inputs
 
