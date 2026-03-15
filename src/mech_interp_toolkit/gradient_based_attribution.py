@@ -219,8 +219,14 @@ def eap_integrated_gradients(
         input_logits = input_logits.detach().cpu()
         baseline_logits = baseline_logits.detach().cpu()
 
-        input_activations = input_activations.detach()
-        baseline_activations = baseline_activations.detach()
+        # Keep the large cached activations off GPU during the IG loop.
+        input_activations = input_activations.detach().cpu()
+        baseline_activations = baseline_activations.detach().cpu()
+
+        input_activations.attention_mask = torch.empty((1, 1))
+        baseline_activations.attention_mask = torch.empty((1, 1))
+
+        _cleanup_memory()
 
         input_embeddings = get_embeddings_dict(model, input_dict)["inputs_embeds"]
         baseline_embeddings = get_embeddings_dict(model, baseline_dict)["inputs_embeds"]
@@ -247,10 +253,16 @@ def eap_integrated_gradients(
                 return_logits=False,
             )
 
+            grad_cache.cpu()
             accumulated_grads.add_(grad_cache, alpha=1.0 / steps)
 
             synthetic_input_dict.pop("inputs_embeds", None)
+
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            del interpolated_embeddings, grad_cache
             model.zero_grad(set_to_none=True)
+            _cleanup_memory()
 
         accumulated_grads = accumulated_grads.split_heads()
         input_activations = input_activations.split_heads()
@@ -274,6 +286,6 @@ def eap_integrated_gradients(
 
     eap_ig_scores.value_type = "eap_ig_scores"
     eap_ig_scores.attention_mask = input_dict["attention_mask"]
-    eap_ig_scores.cpu()
+    eap_ig_scores.detach().cpu()
     model.zero_grad(set_to_none=True)
     return eap_ig_scores, (input_logits, baseline_logits)

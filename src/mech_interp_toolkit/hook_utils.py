@@ -18,9 +18,27 @@ ModuleDict = dict[str, PreTrainedModel]
 
 
 @dataclass
-class HookSpec:
+class HookSpecPre:
     layer_component: LayerComponent
-    fn: Callable[[nn.Module, torch.Tensor, torch.Tensor], torch.Tensor | None]
+    fn: Callable[
+        [nn.Module, torch.Tensor],
+        torch.Tensor | None,
+    ]
+
+
+@dataclass
+class HookSpecPost:
+    layer_component: LayerComponent
+    fn: Callable[
+        [nn.Module, torch.Tensor, torch.Tensor],
+        torch.Tensor | None | tuple[torch.Tensor, torch.Tensor | None],
+    ]
+
+
+class StopExecution(Exception):  # noqa: N818
+    """Exception raised to stop model execution early."""
+
+    pass
 
 
 def _detach_first_tensor(
@@ -67,31 +85,66 @@ def layer_component_to_hookloc(layer_component: LayerComponent) -> str:
         raise ValueError(f"Invalid component name {component}")
 
 
-def gen_hookfn(
+def gen_patch_hookfn(
+    patch_dict: ActivationDict,
+) -> Iterable[HookSpecPre | HookSpecPost]:
+    hook_list = []
+
+    for layer_component in patch_dict:
+        layer, component = layer_component
+
+        if component in ["layer_out", "mlp"]:
+
+            def hook_output_patch_fn(layer_component, _, output):
+                new_act = _detach_first_tensor(output, clone_tensors=True)
+                new_act[:, patch_dict.positions, :] = patch_dict[layer_component]
+                return new_act
+
+            hook_list.append(HookSpecPost(layer_component, hook_output_patch_fn))
+
+        elif component == "attn":
+
+            def hook_output_attn_patch_fn(layer_component, _, output):
+                new_act = _detach_first_tensor(output, clone_tensors=True)
+                new_act[:, patch_dict.positions, :] = patch_dict[layer_component]
+                return (new_act, None)
+
+            hook_list.append(HookSpecPost(layer_component, hook_output_attn_patch_fn))
+
+        else:
+
+            def hook_input_patch_fn(layer_component, inputs):
+                new_act = _detach_first_tensor(inputs, clone_tensors=True)
+                new_act[:, patch_dict.positions, :] = patch_dict[layer_component]
+                return new_act
+
+            hook_list.append(HookSpecPre(layer_component, hook_input_patch_fn))
+
+    return hook_list
+
+
+def gen_cache_hookfn(
     layer_components: Iterable[LayerComponent],
     results: ActivationDict,
     clone_tensors: bool = False,
-) -> Iterable[HookSpec]:
+) -> Iterable[HookSpecPre | HookSpecPost]:
     hook_list = []
+
     for layer_component in layer_components:
         layer, component = layer_component
 
         if component in ["layer_out", "attn", "mlp"]:
 
             def hook_output_fn(layer_component, _, output):
-                results[layer_component] = _detach_first_tensor(
-                    output, clone_tensors=clone_tensors
-                )
+                results[layer_component] = _detach_first_tensor(output, clone_tensors=clone_tensors)
 
-            hook_list.append(HookSpec(layer_component, hook_output_fn))
+            hook_list.append(HookSpecPost(layer_component, hook_output_fn))
         else:
 
             def hook_input_fn(layer_component, inputs, _):
-                results[layer_component] = _detach_first_tensor(
-                    inputs, clone_tensors=clone_tensors
-                )
+                results[layer_component] = _detach_first_tensor(inputs, clone_tensors=clone_tensors)
 
-            hook_list.append(HookSpec(layer_component, hook_input_fn))
+            hook_list.append(HookSpecPost(layer_component, hook_input_fn))
 
     return hook_list
 
@@ -99,7 +152,8 @@ def gen_hookfn(
 @contextmanager
 def temporary_hooks(
     module_dict: ModuleDict,
-    hook_specs_dict: dict[str, Iterable[HookSpec]],
+    hook_specs_dict: dict[str, Iterable[HookSpecPre | HookSpecPost]],
+    early_exit: bool = False,
 ):
     """
     Register forward hooks temporarily and remove them on exit.
@@ -108,6 +162,7 @@ def temporary_hooks(
       fn(output, module_name, module) -> None or modified_output
     """
     handles: list[RemovableHandle] = []
+    last_layer_of_interest: int | None = None
 
     try:
         for hook_type, hook_specs in hook_specs_dict.items():
@@ -121,30 +176,77 @@ def temporary_hooks(
                 fn = spec.fn
                 module = module_dict[module_name]
 
-                def make_hook(fn, layer_component: LayerComponent):
+                def make_post_hook(fn, layer_component: LayerComponent) -> Callable:
                     def hook(
                         module: nn.Module,
                         inputs: tuple | torch.Tensor,
                         output: tuple | torch.Tensor,
-                    ):
+                    ) -> tuple | torch.Tensor | None:
                         new_output = fn(layer_component, inputs, output)
                         return new_output
 
                     return hook
 
+                def make_pre_hook(fn, layer_component: LayerComponent):
+                    def hook(
+                        module: nn.Module,
+                        inputs: tuple | torch.Tensor,
+                    ) -> torch.Tensor | None:
+                        new_output = fn(layer_component, inputs)
+                        return new_output
+
+                    return hook
+
                 if hook_type == "fwd":
-                    handles.append(module.register_forward_hook(make_hook(fn, layer_component)))
+                    handles.append(
+                        module.register_forward_hook(make_post_hook(fn, layer_component))
+                    )
+                    if last_layer_of_interest is None:
+                        last_layer_of_interest = layer_component[0]
+                    else:
+                        last_layer_of_interest = max(last_layer_of_interest, layer_component[0])
+
                 elif hook_type == "bwd":
                     handles.append(
-                        module.register_full_backward_hook(make_hook(fn, layer_component))
+                        module.register_full_backward_hook(make_post_hook(fn, layer_component))
                     )
+                elif hook_type == "patch":
+                    if isinstance(spec, HookSpecPre):
+                        handles.append(
+                            module.register_forward_pre_hook(make_pre_hook(fn, layer_component))
+                        )
+                    elif isinstance(spec, HookSpecPost):
+                        handles.append(
+                            module.register_forward_hook(make_post_hook(fn, layer_component))
+                        )
                 else:
                     raise ValueError(f"Invalid hook type {hook_type}")
 
+        if early_exit:
+            if "bwd" in hook_specs_dict.keys():
+                raise ValueError("Early exit not supported with backward passes")
+            if last_layer_of_interest is None:
+                raise ValueError("Early exit requires at least one forward hook target")
+
+            stop_at_module = layer_component_to_hookloc((last_layer_of_interest, "layer_out"))
+            module = module_dict[stop_at_module]
+
+            def stop_execution_hook(module: nn.Module, *args, **kwargs):
+                raise StopExecution
+
+            handles.append(module.register_forward_hook(stop_execution_hook))
+
         yield
 
+    except StopExecution:
+        print(f"model execution stopped after layer {last_layer_of_interest}")
+
     except Exception as e:
-        print(f"Exception occurred while executing {hook_type} hook for {layer_component}: {e}")
+        hook_type_name = locals().get("hook_type", "<unknown>")
+        layer_component_name = locals().get("layer_component", "<unknown>")
+        print(
+            f"Exception occurred while executing {hook_type_name} hook for {layer_component_name}: {e}"
+        )
         raise e
 
     finally:
