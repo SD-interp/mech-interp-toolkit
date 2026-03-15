@@ -274,6 +274,6 @@ def eap_integrated_gradients(
 
     eap_ig_scores.value_type = "eap_ig_scores"
     eap_ig_scores.attention_mask = input_dict["attention_mask"]
-    eap_ig_scores.cpu()
+    eap_ig_scores.detach().cpu()
     model.zero_grad(set_to_none=True)
     return eap_ig_scores, (input_logits, baseline_logits)

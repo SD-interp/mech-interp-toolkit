@@ -195,7 +195,11 @@ def patch_activations(
 
 
 def get_embeddings_dict(model: PreTrainedModel, inputs: dict[str, Tensor]) -> dict[str, Tensor]:
-    if "inputs_embeds" not in inputs:
+    """Return a synthetic-input-ready copy of ``inputs`` with ``inputs_embeds`` populated."""
+    embeddings_inputs = inputs.copy()
+    embeddings_inputs.pop("input_ids", None)
+
+    if "inputs_embeds" not in embeddings_inputs:
         embeds, _ = get_activations(
             model,
             inputs,
@@ -204,9 +208,9 @@ def get_embeddings_dict(model: PreTrainedModel, inputs: dict[str, Tensor]) -> di
             return_logits=False,
             early_exit=True,
         )
-        inputs.pop("input_ids", None)
-        inputs["inputs_embeds"] = embeds[(0, "layer_in")].detach()
-    return inputs
+        embeddings_inputs["inputs_embeds"] = embeds[(0, "layer_in")].detach()
+
+    return embeddings_inputs
 
 
 def interpolate_activations(
