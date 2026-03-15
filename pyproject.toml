@@ -13,7 +13,6 @@ dependencies = [
     "scikit-learn>=1.8.0",
     "torch>=2.0.0",
     "transformers>=4.57.3",
-    "nnsight>=0.1",
 ]
 authors = [
   { name = "Shantanu Darveshi", email = "shantanu.darveshi@gmail.com" },
