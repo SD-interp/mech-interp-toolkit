@@ -6,6 +6,8 @@ from typing import Callable, Self
 
 import einops
 import torch
+from torch import Tensor
+from torch.nn import functional as F  # noqa: N812
 
 from .utils import empty_dict_like, regularize_position, zeros_dict_like
 
@@ -19,7 +21,7 @@ class FrozenError(RuntimeError):
     pass
 
 
-class FreezableDict(ABC, dict[LayerComponent, torch.Tensor]):
+class FreezableDict(ABC, dict[LayerComponent, Tensor]):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._frozen = False
@@ -50,15 +52,15 @@ class FreezableDict(ABC, dict[LayerComponent, torch.Tensor]):
         self._check_frozen()
         return super().clear()
 
-    def pop(self, *args) -> torch.Tensor:
+    def pop(self, *args) -> Tensor:
         self._check_frozen()
         return super().pop(*args)
 
-    def popitem(self) -> tuple[LayerComponent, torch.Tensor]:
+    def popitem(self) -> tuple[LayerComponent, Tensor]:
         self._check_frozen()
         return super().popitem()
 
-    def setdefault(self, *args) -> torch.Tensor:
+    def setdefault(self, *args) -> Tensor:
         self._check_frozen()
         return super().setdefault(*args)
 
@@ -76,143 +78,199 @@ class ArithmeticOperation(FreezableDict):
         self.config = config
         self.positions = positions
 
-    def check_compatibility(self, other) -> None:
-        if not isinstance(other, ActivationDict):
-            raise ValueError("Operand must be an instance of ActivationDict.")
-
+    def check_act_dict_compatibility(self, other) -> None:
         if self.keys() != other.keys():
             warnings.warn(
                 "ActivationDicts have different keys; only matching keys will be processed."
             )
 
     def __add__(self, other) -> Self:
-        self.check_compatibility(other)
         if isinstance(other, ActivationDict):
+            self.check_act_dict_compatibility(other)
             result = empty_dict_like(self)
             for key in self.keys():
                 if key in other:
                     result[key] = self[key] + other[key]
             return result
+        elif isinstance(other, (int, float, Tensor)):
+            result = empty_dict_like(self)
+            for key in self.keys():
+                result[key] = self[key] + other
+            return result
         else:
-            raise NotImplementedError("Addition only supported between ActivationDicts.")
+            raise NotImplementedError(
+                f"Addition not supported for this type (received: {type(other).__name__})."
+            )
 
     def __iadd__(self, other) -> Self:
-        self.check_compatibility(other)
         if isinstance(other, ActivationDict):
+            self.check_act_dict_compatibility(other)
             for key in self.keys():
                 if key in other:
                     self[key].add_(other[key])
             return self
+        elif isinstance(other, (int, float, Tensor)):
+            for key in self.keys():
+                self[key].add_(other)
+            return self
         else:
-            raise NotImplementedError("In-place addition only supported between ActivationDicts.")
+            raise NotImplementedError(
+                f"In-place addition not supported for this type (received: {type(other).__name__})."
+            )
 
     def __radd__(self, other) -> Self:
+        if isinstance(other, ActivationDict):
+            return NotImplemented
         return self.__add__(other)
 
     def __sub__(self, other) -> Self:
-        self.check_compatibility(other)
         if isinstance(other, ActivationDict):
+            self.check_act_dict_compatibility(other)
             result = empty_dict_like(self)
             for key in self.keys():
                 if key in other:
                     result[key] = self[key] - other[key]
             return result
+        elif isinstance(other, (int, float, Tensor)):
+            result = empty_dict_like(self)
+            for key in self.keys():
+                result[key] = self[key] - other
+            return result
         else:
-            raise NotImplementedError("Subtraction only supported between ActivationDicts.")
+            raise NotImplementedError(
+                f"Subtraction not supported for this type (received: {type(other).__name__})."
+            )
 
     def __isub__(self, other) -> Self:
-        self.check_compatibility(other)
         if isinstance(other, ActivationDict):
+            self.check_act_dict_compatibility(other)
             for key in self.keys():
                 if key in other:
                     self[key].sub_(other[key])
             return self
+        elif isinstance(other, (int, float, Tensor)):
+            for key in self.keys():
+                self[key].sub_(other)
+            return self
         else:
             raise NotImplementedError(
-                "In-place subtraction only supported between ActivationDicts."
+                f"In-place subtraction not supported for this type (received: {type(other).__name__})."
             )
 
     def __mul__(self, other) -> Self:
         if isinstance(other, ActivationDict):
-            self.check_compatibility(other)
+            self.check_act_dict_compatibility(other)
             result = empty_dict_like(self)
             for key in self.keys():
                 if key in other:
                     result[key] = self[key] * other[key]
             return result
-        elif isinstance(other, (int, float, torch.Tensor)):
+        elif isinstance(other, (int, float, Tensor)):
             result = empty_dict_like(self)
             for key in self.keys():
                 result[key] = self[key] * other
             return result
         else:
-            raise NotImplementedError("Multiplication not supported for this type.")
+            raise NotImplementedError(
+                f"Multiplication not supported for this type (received: {type(other).__name__})."
+            )
 
     def __imul__(self, other) -> Self:
         if isinstance(other, ActivationDict):
-            self.check_compatibility(other)
+            self.check_act_dict_compatibility(other)
             for key in self.keys():
                 if key in other:
                     self[key].mul_(other[key])
             return self
-        elif isinstance(other, (int, float, torch.Tensor)):
+        elif isinstance(other, (int, float, Tensor)):
             for key in self.keys():
                 self[key].mul_(other)
             return self
         else:
-            raise NotImplementedError("In-place multiplication not supported for this type.")
+            raise NotImplementedError(
+                f"In-place multiplication not supported for this type (received: {type(other).__name__})."
+            )
 
     def __rmul__(self, other) -> Self:
+        if isinstance(other, ActivationDict):
+            return NotImplemented
         return self.__mul__(other)
 
     def __truediv__(self, other) -> Self:
         if isinstance(other, ActivationDict):
-            self.check_compatibility(other)
+            self.check_act_dict_compatibility(other)
             result = empty_dict_like(self)
             for key in self.keys():
                 if key in other:
                     result[key] = self[key] / other[key]
             return result
-        elif isinstance(other, (int, float, torch.Tensor)):
+        elif isinstance(other, (int, float, Tensor)):
             result = empty_dict_like(self)
             for key in self.keys():
                 result[key] = self[key] / other
             return result
         else:
-            raise NotImplementedError("Division not supported for this type.")
+            raise NotImplementedError(
+                f"Division not supported for this type (received: {type(other).__name__})."
+            )
 
     def __itruediv__(self, other) -> Self:
-        if isinstance(other, (int, float, torch.Tensor)):
+        if isinstance(other, ActivationDict):
+            self.check_act_dict_compatibility(other)
+            for key in self.keys():
+                if key in other:
+                    self[key].div_(other[key])
+            return self
+        elif isinstance(other, (int, float, Tensor)):
             for key in self.keys():
                 self[key].div_(other)
             return self
         else:
-            raise NotImplementedError("In-place division only supported for scalars and tensors.")
+            raise NotImplementedError(
+                f"In-place division not supported for this type (received: {type(other).__name__})."
+            )
+
+    def __rtruediv__(self, other) -> Self:
+        if isinstance(other, ActivationDict):
+            return NotImplemented
+        elif isinstance(other, (int, float, Tensor)):
+            result = empty_dict_like(self)
+            for key in self.keys():
+                result[key] = other / self[key]
+            return result
+        else:
+            raise NotImplementedError(
+                f"Division not supported for this type (received: {type(other).__name__})."
+            )
 
     def __matmul__(self, other) -> Self:
         if isinstance(other, ActivationDict):
-            self.check_compatibility(other)
+            self.check_act_dict_compatibility(other)
             result = empty_dict_like(self)
             for key in self.keys():
                 if key in other:
                     result[key] = self[key] @ other[key]
             return result
-        elif isinstance(other, torch.Tensor):
+        elif isinstance(other, Tensor):
             result = empty_dict_like(self)
             for key in self.keys():
                 result[key] = self[key] @ other
             return result
         else:
-            raise NotImplementedError("Matrix multiplication not supported for this type.")
+            raise NotImplementedError(
+                f"Matrix multiplication not supported for this type (received: {type(other).__name__})."
+            )
 
     def __rmatmul__(self, other) -> Self:
-        if isinstance(other, torch.Tensor):
+        if isinstance(other, Tensor):
             result = empty_dict_like(self)
             for key in self.keys():
                 result[key] = other @ self[key]
             return result
         else:
-            raise NotImplementedError("Matrix multiplication not supported for this type.")
+            raise NotImplementedError(
+                f"Matrix multiplication not supported for this type (received: {type(other).__name__})."
+            )
 
 
 class ActivationDict(ArithmeticOperation):
@@ -254,6 +312,23 @@ class ActivationDict(ArithmeticOperation):
 
     def zeros_like(self) -> Self:
         return zeros_dict_like(self)
+
+    def add_(self, other, *, alpha: int | float = 1) -> Self:
+        """In-place add, mirroring Tensor.add_ semantics where relevant."""
+        if isinstance(other, ActivationDict):
+            self.check_act_dict_compatibility(other)
+            for key in self.keys():
+                if key in other:
+                    self[key].add_(other[key], alpha=alpha)
+            return self
+        elif isinstance(other, (int, float, Tensor)):
+            for key in self.keys():
+                self[key].add_(other, alpha=alpha)
+            return self
+        else:
+            raise NotImplementedError(
+                f"In-place addition not supported for this type (received: {type(other).__name__})."
+            )
 
     def reorganize(self) -> Self:
         execution_order = {
@@ -368,7 +443,7 @@ class ActivationDict(ArithmeticOperation):
 
             base_mask = self.attention_mask.bool()
 
-            def apply_func(x: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+            def apply_func(x: Tensor, *args, **kwargs) -> Tensor:
                 mask = base_mask.to(x.device)
                 while mask.ndim < x.ndim:
                     mask = mask.unsqueeze(-1)
@@ -455,3 +530,55 @@ class ActivationDict(ArithmeticOperation):
                 warnings.warn(f"Key {key} not found in ActivationDict. Skipping.")
 
         return new_obj
+
+
+def _pad_and_concat(tensors, padding_value, dim):
+    dim = dim % tensors[0].ndim
+    max_len = max(t.shape[dim] for t in tensors)
+
+    padded = []
+    ndim = tensors[0].ndim
+
+    for t in tensors:
+        pad_len = max_len - t.shape[dim]
+        if pad_len > 0:
+            pad = [0, 0] * ndim
+            # left-padding: put pad_len on the "left" side of `dim`
+            pad[2 * (ndim - dim - 1)] = pad_len
+            t = F.pad(t, pad, value=padding_value)
+        padded.append(t)
+
+    return torch.cat(padded, dim=0)
+
+
+def concat_activations(list_activations: list[ActivationDict], pad_value=None) -> ActivationDict:
+    new_obj = empty_dict_like(list_activations[0])
+
+    if new_obj.attention_mask.numel() > 0:
+        new_obj.attention_mask = _pad_and_concat(
+            [activation.attention_mask for activation in list_activations],
+            padding_value=0,
+            dim=1,
+        )
+
+    for key in new_obj.keys():
+        if pad_value is None:
+            new_obj[key] = torch.cat([activation[key] for activation in list_activations])
+        else:
+            new_obj[key] = _pad_and_concat(
+                [activation[key] for activation in list_activations],
+                padding_value=pad_value,
+                dim=1,
+            )
+
+    return new_obj
+
+
+def expand_mask(mask: Tensor, expansion: int):
+    batch_size, seq_len = mask.shape
+
+    padding = torch.zeros((batch_size, expansion), dtype=mask.dtype, device=mask.device)
+
+    merged_tensor = torch.cat([padding, mask], dim=1)
+
+    return merged_tensor[:, :seq_len]
