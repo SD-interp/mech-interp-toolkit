@@ -156,8 +156,8 @@ def edge_attribution_patching(
         input_logits = cast(torch.Tensor, input_logits)
         baseline_logits = cast(torch.Tensor, baseline_logits)
 
-        input_logits = input_logits.detach().cpu()
-        baseline_logits = baseline_logits.detach().cpu()
+        input_logits = input_logits.cpu()
+        baseline_logits = baseline_logits.cpu()
 
         input_activations = input_activations.split_heads()
         baseline_activations = baseline_activations.split_heads()
@@ -216,13 +216,12 @@ def eap_integrated_gradients(
         input_logits = cast(torch.Tensor, input_logits)
         baseline_logits = cast(torch.Tensor, baseline_logits)
 
-        input_logits = input_logits.detach().cpu()
-        baseline_logits = baseline_logits.detach().cpu()
+        input_logits = input_logits.cpu()
+        baseline_logits = baseline_logits.cpu()
 
-        # Move activations to CPU before the embedding forward passes to minimize peak GPU usage.
-        # They are only needed for the final score computation, not during the integration loop.
-        input_activations = input_activations.detach().cpu()
-        baseline_activations = baseline_activations.detach().cpu()
+        # Keep the large cached activations off GPU during the IG loop.
+        input_activations = input_activations.cpu()
+        baseline_activations = baseline_activations.cpu()
 
         input_activations.attention_mask = torch.empty((1, 1))
         baseline_activations.attention_mask = torch.empty((1, 1))
@@ -236,13 +235,12 @@ def eap_integrated_gradients(
 
         synthetic_input_dict = _prepare_synthetic_inputs(input_dict)
         alphas = _get_alpha_values(steps, input_embeddings.dtype)
-        # Keep accumulated_grads on CPU - grads are moved here after each step.
         accumulated_grads = input_activations.zeros_like()
 
         for alpha in alphas:
             interpolated_embeddings = interpolate_activations(
                 baseline_embeddings, input_embeddings, alpha
-            ).detach()
+            )
             interpolated_embeddings.requires_grad_(True)
             synthetic_input_dict["inputs_embeds"] = interpolated_embeddings
 
@@ -255,9 +253,8 @@ def eap_integrated_gradients(
                 return_logits=False,
             )
 
-            grad_cache /= steps
             grad_cache.cpu()
-            accumulated_grads += grad_cache
+            accumulated_grads.add_(grad_cache, alpha=1.0 / steps)
 
             synthetic_input_dict.pop("inputs_embeds", None)
 
