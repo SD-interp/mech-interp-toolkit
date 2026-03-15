@@ -16,7 +16,6 @@ from . import (
     direct_logit_attribution,
     gradient_based_attribution,
     linear_probes,
-    misc,
     tokenizer,
     utils,
 )
@@ -28,5 +27,4 @@ __all__ = [
     "direct_logit_attribution",
     "gradient_based_attribution",
     "linear_probes",
-    "misc",
 ]
