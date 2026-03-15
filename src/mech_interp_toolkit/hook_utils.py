@@ -162,7 +162,7 @@ def temporary_hooks(
       fn(output, module_name, module) -> None or modified_output
     """
     handles: list[RemovableHandle] = []
-    last_layer_of_interest = 0
+    last_layer_of_interest: int | None = None
 
     try:
         for hook_type, hook_specs in hook_specs_dict.items():
@@ -201,7 +201,10 @@ def temporary_hooks(
                     handles.append(
                         module.register_forward_hook(make_post_hook(fn, layer_component))
                     )
-                    last_layer_of_interest = max(last_layer_of_interest, layer_component[0])
+                    if last_layer_of_interest is None:
+                        last_layer_of_interest = layer_component[0]
+                    else:
+                        last_layer_of_interest = max(last_layer_of_interest, layer_component[0])
 
                 elif hook_type == "bwd":
                     handles.append(
@@ -222,6 +225,8 @@ def temporary_hooks(
         if early_exit:
             if "bwd" in hook_specs_dict.keys():
                 raise ValueError("Early exit not supported with backward passes")
+            if last_layer_of_interest is None:
+                raise ValueError("Early exit requires at least one forward hook target")
 
             stop_at_module = layer_component_to_hookloc((last_layer_of_interest, "layer_out"))
             module = module_dict[stop_at_module]
@@ -237,7 +242,11 @@ def temporary_hooks(
         print(f"model execution stopped after layer {last_layer_of_interest}")
 
     except Exception as e:
-        print(f"Exception occurred while executing {hook_type} hook for {layer_component}: {e}")
+        hook_type_name = locals().get("hook_type", "<unknown>")
+        layer_component_name = locals().get("layer_component", "<unknown>")
+        print(
+            f"Exception occurred while executing {hook_type_name} hook for {layer_component_name}: {e}"
+        )
         raise e
 
     finally:
