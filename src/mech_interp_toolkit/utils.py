@@ -49,7 +49,8 @@ def load_model_tokenizer_config(
 
     Args:
         model_name: The model identifier from the Hugging Face Hub or a local path.
-        device: The device to load the model on. If None, defaults to 'cuda' if available, otherwise 'cpu'.
+        device: The device to load the model on. If None, defaults to 'cuda' if available,
+            otherwise 'mps' if available, otherwise 'cpu'.
         padding_side: The side to pad the tokenizer on.
         attn_type: The attention implementation to use.
         suffix: A suffix to append to the model name.
@@ -161,12 +162,17 @@ def get_layer_components(
 
 def get_default_device() -> str:
     """
-    Get the default device (cuda if available, otherwise cpu).
+    Get the default device (cuda if available, otherwise mps, otherwise cpu).
 
     Returns:
-        The device string ('cuda' or 'cpu').
+        The device string ('cuda', 'mps', or 'cpu').
     """
-    return "cuda" if torch.cuda.is_available() else "cpu"
+    if torch.cuda.is_available():
+        return "cuda"
+    mps_backend = getattr(torch.backends, "mps", None)
+    if mps_backend is not None and mps_backend.is_available():
+        return "mps"
+    return "cpu"
 
 
 def _fill_dict_like(dict_like: T, value: float | int | None) -> T:
